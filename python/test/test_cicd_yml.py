@@ -3,7 +3,8 @@ import unittest
 
 import yaml
 
-project_root = pathlib.Path(__file__).parent.parent.parent
+project_root = pathlib.Path(__file__).resolve().parent.parent.parent
+
 
 class TestActionYml(unittest.TestCase):
 
@@ -11,7 +12,7 @@ class TestActionYml(unittest.TestCase):
         with open(project_root / 'action.yml', encoding='utf-8') as r:
             action = yaml.safe_load(r)
 
-        with open(project_root / '.github/workflows/ci-cd.yml', encoding='utf-8') as r:
+        with open(project_root / '.github/workflows/publish.yml', encoding='utf-8') as r:
             cicd = yaml.safe_load(r)
 
         docker_image_steps = cicd.get('jobs', []).get('publish-docker-image', {}).get('steps', [])
@@ -21,10 +22,10 @@ class TestActionYml(unittest.TestCase):
         self.assertEqual(1, len(docker_image_step))
         docker_image_run = docker_image_step[0].get('run')
         self.assertTrue(docker_image_run)
-        vars = [var[6:].lower()
+        vars = [var[7:-1].lower() if var.startswith('"') and var.endswith('"') else var[6:].lower()
                 for line in docker_image_run.split('\n')
                 for part in line.split(' ')
                 for var in [part.strip()]
-                if var.startswith('INPUT_')]
+                if var.startswith('INPUT_') or var.startswith('"INPUT_')]
 
-        self.assertEqual(sorted(action.get('inputs', {}).keys()), sorted(vars))
+        self.assertEqual(sorted(list(action.get('inputs', {}).keys()) + ['log_level', 'root_log_level']), sorted(vars))
