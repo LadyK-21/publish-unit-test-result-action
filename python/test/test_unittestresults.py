@@ -5,17 +5,21 @@ from xml.etree.ElementTree import ParseError as XmlParseError
 
 from publish.unittestresults import get_test_results, get_stats, get_stats_delta, \
     ParsedUnitTestResults, ParsedUnitTestResultsWithCommit, \
-    UnitTestCase, UnitTestResults, UnitTestCaseResults, \
+    UnitTestCase, UnitTestResults, UnitTestSuite, create_unit_test_case_results, \
     UnitTestRunResults, UnitTestRunDeltaResults, ParseError
-from test import d, n
+from test_utils import d, n
 
-errors = [ParseError('file', 'error', None, None)]
-errors_dict = [dataclasses.asdict(e) for e in errors]
+errors = [ParseError('file', 'error', exception=ValueError("Invalid value"))]
+errors_dict = [{k: v
+                for k, v in dataclasses.asdict(e.without_exception()).items()
+                if v is not None}
+               for e in errors]
 
 
 def create_unit_test_run_results(files=1,
                                  errors: List[ParseError] = [],
                                  suites=2,
+                                 suite_details=None,
                                  duration=3,
                                  tests=22, tests_succ=4, tests_skip=5, tests_fail=6, tests_error=7,
                                  runs=38, runs_succ=8, runs_skip=9, runs_fail=10, runs_error=11,
@@ -24,6 +28,7 @@ def create_unit_test_run_results(files=1,
         files=files,
         errors=list(errors),
         suites=suites,
+        suite_details=suite_details,
         duration=duration,
         tests=tests, tests_succ=tests_succ, tests_skip=tests_skip, tests_fail=tests_fail, tests_error=tests_error,
         runs=runs, runs_succ=runs_succ, runs_skip=runs_skip, runs_fail=runs_fail, runs_error=runs_error,
@@ -50,6 +55,7 @@ def create_unit_test_run_delta_results(files=1, files_delta=-1,
         errors=errors,
         suites={'number': suites, 'delta': suites_delta},
         duration={'duration': duration, 'delta': duration_delta},
+        suite_details=TestUnitTestResults.details,
         tests={'number': tests, 'delta': tests_delta}, tests_succ={'number': tests_succ, 'delta': tests_succ_delta}, tests_skip={'number': tests_skip, 'delta': tests_skip_delta}, tests_fail={'number': tests_fail, 'delta': tests_fail_delta}, tests_error={'number': tests_error, 'delta': tests_error_delta},
         runs={'number': runs, 'delta': runs_delta}, runs_succ={'number': runs_succ, 'delta': runs_succ_delta}, runs_skip={'number': runs_skip, 'delta': runs_skip_delta}, runs_fail={'number': runs_fail, 'delta': runs_fail_delta}, runs_error={'number': runs_error, 'delta': runs_error_delta},
         commit='commit',
@@ -58,63 +64,87 @@ def create_unit_test_run_delta_results(files=1, files_delta=-1,
 
 
 class TestUnitTestResults(unittest.TestCase):
+    details = [UnitTestSuite('suite', 7, 3, 2, 1, 'std-out', 'std-err')]
 
     def test_parse_error_from_xml_parse_error(self):
         error = XmlParseError('xml parse error')
         error.code = 123
         error.position = (1, 2)
         actual = ParseError.from_exception('file', error)
-        expected = ParseError('file', 'xml parse error', 1, 2)
+        expected = ParseError('file', 'xml parse error', 1, 2, exception=error)
         self.assertEqual(expected, actual)
 
     def test_parse_error_from_file_not_found(self):
         error = FileNotFoundError(2, 'No such file or directory')
         error.filename = 'some file path'
         actual = ParseError.from_exception('file', error)
-        expected = ParseError('file', "[Errno 2] No such file or directory: 'some file path'", None, None)
+        expected = ParseError('file', "[Errno 2] No such file or directory: 'some file path'", exception=error)
         self.assertEqual(expected, actual)
 
     def test_parse_error_from_error(self):
-        actual = ParseError.from_exception('file', ValueError('error'))
-        expected = ParseError('file', 'error', None, None)
+        error = ValueError('error')
+        actual = ParseError.from_exception('file', error)
+        expected = ParseError('file', 'error', exception=error)
         self.assertEqual(expected, actual)
+
+    def test_parse_error_with_exception(self):
+        error = ValueError('error')
+        actual = ParseError.from_exception('file', error)
+        expected = ParseError('file', 'error', exception=None)
+        self.assertEqual(expected, actual.without_exception())
 
     def test_parsed_unit_test_results_with_commit(self):
         self.assertEqual(
             ParsedUnitTestResultsWithCommit(
                 files=1,
                 errors=errors,
-                suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+                suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
                 cases=[
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', time=1),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', time=2),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', time=3),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', time=4),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='skipped', message='message5', content='content5', time=5),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', time=6),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', time=7),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=2),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=3),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=4),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='skipped', message='message5', content='content5', stdout='stdout5', stderr='stderr5', time=5),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', stdout='stdout6', stderr='stderr6', time=6),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', stdout='stdout7', stderr='stderr7', time=7),
                 ],
                 commit='commit sha'
             ),
             ParsedUnitTestResults(
                 files=1,
                 errors=errors,
-                suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+                suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
                 cases=[
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', time=1),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', time=2),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', time=3),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', time=4),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='skipped', message='message5', content='content5', time=5),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', time=6),
-                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', time=7),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=2),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=3),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=4),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='skipped', message='message5', content='content5', stdout='stdout5', stderr='stderr5', time=5),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', stdout='stdout6', stderr='stderr6', time=6),
+                    UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', stdout='stdout7', stderr='stderr7', time=7),
                 ]
             ).with_commit('commit sha')
         )
 
+    def test_unit_test_run_results_without_exception(self):
+        results = create_unit_test_run_results(errors=errors)
+        self.assertEqual(create_unit_test_run_results(errors=[error.without_exception() for error in errors]),
+                         results.without_exceptions())
+
+    def test_unit_test_run_results_without_suite_details(self):
+        suite = UnitTestSuite('suite', 7, 3, 2, 1, 'stdout', 'stderr')
+        results = create_unit_test_run_results(suite_details=[suite])
+        self.assertEqual(create_unit_test_run_results(suite_details=None),
+                         results.without_suite_details())
+
+    def test_unit_test_run_delta_results_without_exception(self):
+        results = create_unit_test_run_delta_results(errors=errors)
+        self.assertEqual(create_unit_test_run_delta_results(errors=[error.without_exception() for error in errors]),
+                         results.without_exceptions())
+
     def test_unit_test_run_results_to_dict(self):
         actual = UnitTestRunResults(
-            files=1, errors=errors, suites=2, duration=3,
+            files=1, errors=errors, suites=2, duration=3, suite_details=self.details,
             tests=4, tests_succ=5, tests_skip=6, tests_fail=7, tests_error=8,
             runs=9, runs_succ=10, runs_skip=11, runs_fail=12, runs_error=13,
             commit='commit'
@@ -136,7 +166,7 @@ class TestUnitTestResults(unittest.TestCase):
             commit='commit'
         ))
         expected = UnitTestRunResults(
-            files=1, errors=errors_dict, suites=2, duration=3,
+            files=1, errors=errors_dict, suites=2, duration=3, suite_details=None,
             tests=4, tests_succ=5, tests_skip=6, tests_fail=7, tests_error=8,
             runs=9, runs_succ=10, runs_skip=11, runs_fail=12, runs_error=13,
             commit='commit'
@@ -145,13 +175,13 @@ class TestUnitTestResults(unittest.TestCase):
 
     def test_unit_test_run_results_from_dict_without_errors(self):
         actual = UnitTestRunResults.from_dict(dict(
-            files=1, suites=2, duration=3,
+            files=1, suites=2, duration=3, suite_details=self.details,
             tests=4, tests_succ=5, tests_skip=6, tests_fail=7, tests_error=8,
             runs=9, runs_succ=10, runs_skip=11, runs_fail=12, runs_error=13,
             commit='commit'
         ))
         expected = UnitTestRunResults(
-            files=1, errors=[], suites=2, duration=3,
+            files=1, errors=[], suites=2, duration=3, suite_details=None,
             tests=4, tests_succ=5, tests_skip=6, tests_fail=7, tests_error=8,
             runs=9, runs_succ=10, runs_skip=11, runs_fail=12, runs_error=13,
             commit='commit'
@@ -162,14 +192,14 @@ class TestUnitTestResults(unittest.TestCase):
         self.assertEqual(get_test_results(ParsedUnitTestResultsWithCommit(
             files=0,
             errors=[],
-            suites=0, suite_tests=0, suite_skipped=0, suite_failures=0, suite_errors=0, suite_time=0,
+            suites=0, suite_tests=0, suite_skipped=0, suite_failures=0, suite_errors=0, suite_time=0, suite_details=self.details,
             cases=[],
             commit='commit'
         ), False), UnitTestResults(
             files=0,
             errors=[],
-            suites=0, suite_tests=0, suite_skipped=0, suite_failures=0, suite_errors=0, suite_time=0,
-            cases=0, cases_skipped=0, cases_failures=0, cases_errors=0, cases_time=0, case_results=UnitTestCaseResults(),
+            suites=0, suite_tests=0, suite_skipped=0, suite_failures=0, suite_errors=0, suite_time=0, suite_details=self.details,
+            cases=0, cases_skipped=0, cases_failures=0, cases_errors=0, cases_time=0, case_results=create_unit_test_case_results(),
             tests=0, tests_skipped=0, tests_failures=0, tests_errors=0,
             commit='commit'
         ))
@@ -178,31 +208,31 @@ class TestUnitTestResults(unittest.TestCase):
         self.assertEqual(get_test_results(ParsedUnitTestResultsWithCommit(
             files=1,
             errors=errors,
-            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
             cases=[
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', time=1),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', time=2),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', time=3),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', time=4),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='skipped', message='message5', content='content5', time=5),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', time=6),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', time=7),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=2),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=3),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=4),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='skipped', message='message5', content='content5', stdout='stdout5', stderr='stderr5', time=5),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', stdout='stdout6', stderr='stderr6', time=6),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', stdout='stdout7', stderr='stderr7', time=7),
             ],
             commit='commit'
         ), False), UnitTestResults(
             files=1,
             errors=errors,
-            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
             cases=7, cases_skipped=2, cases_failures=3, cases_errors=1, cases_time=28,
-            case_results=UnitTestCaseResults([
-                ((None, 'class1', 'test1'), dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', time=1)])),
-                ((None, 'class1', 'test2'), dict(skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', time=2)])),
-                ((None, 'class1', 'test3'), dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', time=3)])),
-                ((None, 'class2', 'test1'), dict(error=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', time=4)])),
-                ((None, 'class2', 'test2'), dict(skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='skipped', message='message5', content='content5', time=5)])),
-                ((None, 'class2', 'test3'), dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', time=6)])),
-                ((None, 'class2', 'test4'), dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', time=7)])),
-            ]),
+            case_results=create_unit_test_case_results({
+                (None, 'class1', 'test1'): dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1)]),
+                (None, 'class1', 'test2'): dict(skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=2)]),
+                (None, 'class1', 'test3'): dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=3)]),
+                (None, 'class2', 'test1'): dict(error=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=4)]),
+                (None, 'class2', 'test2'): dict(skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='skipped', message='message5', content='content5', stdout='stdout5', stderr='stderr5', time=5)]),
+                (None, 'class2', 'test3'): dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', stdout='stdout6', stderr='stderr6', time=6)]),
+                (None, 'class2', 'test4'): dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', stdout='stdout7', stderr='stderr7', time=7)]),
+        }),
             tests=7, tests_skipped=2, tests_failures=3, tests_errors=1,
             commit='commit'
         ))
@@ -211,38 +241,38 @@ class TestUnitTestResults(unittest.TestCase):
         self.assertEqual(get_test_results(ParsedUnitTestResultsWithCommit(
             files=1,
             errors=[],
-            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
             cases=[
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', time=1),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message2', content='content2', time=2),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=2),
     
                 # success state has precedence over skipped
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='success', message='message3', content='content3', time=3),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message4', content='content4', time=4),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='success', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=3),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=4),
     
                 # only when all runs are skipped, test has state skipped
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='skipped', message='message5', content='content5', time=5),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='skipped', message='message6', content='content6', time=6),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='skipped', message='message5', content='content5', stdout='stdout5', stderr='stderr5', time=5),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='skipped', message='message6', content='content6', stdout='stdout6', stderr='stderr6', time=6),
     
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test4', result='success', message='message7', content='content7', time=7),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test4', result='failure', message='message8', content='content8', time=8),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test4', result='success', message='message7', content='content7', stdout='stdout7', stderr='stderr7', time=7),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test4', result='failure', message='message8', content='content8', stdout='stdout8', stderr='stderr8', time=8),
     
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test5', result='success', message='message9', content='content9', time=9),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test5', result='error', message='message10', content='content10', time=10),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test5', result='success', message='message9', content='content9', stdout='stdout9', stderr='stderr9', time=9),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test5', result='error', message='message10', content='content10', stdout='stdout10', stderr='stderr10', time=10),
             ],
             commit='commit'
         ), False), UnitTestResults(
             files=1,
             errors=[],
-            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
             cases=10, cases_skipped=3, cases_failures=1, cases_errors=1, cases_time=55,
-            case_results=UnitTestCaseResults([
-                ((None, 'class1', 'test1'), dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', time=1), UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message2', content='content2', time=2)])),
-                ((None, 'class1', 'test2'), dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='success', message='message3', content='content3', time=3)], skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message4', content='content4', time=4)])),
-                ((None, 'class1', 'test3'), dict(skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='skipped', message='message5', content='content5', time=5), UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='skipped', message='message6', content='content6', time=6)])),
-                ((None, 'class1', 'test4'), dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test4', result='success', message='message7', content='content7', time=7)], failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test4', result='failure', message='message8', content='content8', time=8)])),
-                ((None, 'class1', 'test5'), dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test5', result='success', message='message9', content='content9', time=9)], error=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test5', result='error', message='message10', content='content10', time=10)])),
-            ]),
+            case_results=create_unit_test_case_results({
+                (None, 'class1', 'test1'): dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1), UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=2)]),
+                (None, 'class1', 'test2'): dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='success', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=3)], skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=4)]),
+                (None, 'class1', 'test3'): dict(skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='skipped', message='message5', content='content5', stdout='stdout5', stderr='stderr5', time=5), UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='skipped', message='message6', content='content6', stdout='stdout6', stderr='stderr6', time=6)]),
+                (None, 'class1', 'test4'): dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test4', result='success', message='message7', content='content7', stdout='stdout7', stderr='stderr7', time=7)], failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test4', result='failure', message='message8', content='content8', stdout='stdout8', stderr='stderr8', time=8)]),
+                (None, 'class1', 'test5'): dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test5', result='success', message='message9', content='content9', stdout='stdout9', stderr='stderr9', time=9)], error=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test5', result='error', message='message10', content='content10', stdout='stdout10', stderr='stderr10', time=10)]),
+            }),
             tests=5, tests_skipped=1, tests_failures=1, tests_errors=1,
             commit='commit'
         ))
@@ -251,24 +281,24 @@ class TestUnitTestResults(unittest.TestCase):
         with_duplicates = ParsedUnitTestResultsWithCommit(
             files=1,
             errors=[],
-            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
             cases=[
-                UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', time=1),
-                UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test1', result='success', message='message2', content='content2', time=2),
+                UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1),
+                UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test1', result='success', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=2),
     
                 # success state has precedence over skipped
-                UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test2', result='success', message='message3', content='content3', time=3),
-                UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test2', result='skipped', message='message4', content='content4', time=4),
+                UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test2', result='success', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=3),
+                UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test2', result='skipped', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=4),
     
                 # only when all runs are skipped, test has state skipped
-                UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test3', result='skipped', message='message5', content='content5', time=5),
-                UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test3', result='skipped', message='message6', content='content6', time=6),
+                UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test3', result='skipped', message='message5', content='content5', stdout='stdout5', stderr='stderr5', time=5),
+                UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test3', result='skipped', message='message6', content='content6', stdout='stdout6', stderr='stderr6', time=6),
     
-                UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test4', result='success', message='message7', content='content7', time=7),
-                UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test4', result='failure', message='message8', content='content8', time=8),
+                UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test4', result='success', message='message7', content='content7', stdout='stdout7', stderr='stderr7', time=7),
+                UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test4', result='failure', message='message8', content='content8', stdout='stdout8', stderr='stderr8', time=8),
     
-                UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test5', result='success', message='message9', content='content9', time=9),
-                UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test5', result='error', message='message10', content='content10', time=10),
+                UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test5', result='success', message='message9', content='content9', stdout='stdout9', stderr='stderr9', time=9),
+                UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test5', result='error', message='message10', content='content10', stdout='stdout10', stderr='stderr10', time=10),
             ],
             commit='commit'
         )
@@ -276,15 +306,15 @@ class TestUnitTestResults(unittest.TestCase):
         self.assertEqual(get_test_results(with_duplicates, False), UnitTestResults(
             files=1,
             errors=[],
-            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
             cases=10, cases_skipped=3, cases_failures=1, cases_errors=1, cases_time=55,
-            case_results=UnitTestCaseResults([
-                ((None, 'class1', 'test1'), dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', time=1), UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test1', result='success', message='message2', content='content2', time=2)])),
-                ((None, 'class1', 'test2'), dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test2', result='success', message='message3', content='content3', time=3)], skipped=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test2', result='skipped', message='message4', content='content4', time=4)])),
-                ((None, 'class1', 'test3'), dict(skipped=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test3', result='skipped', message='message5', content='content5', time=5), UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test3', result='skipped', message='message6', content='content6', time=6)])),
-                ((None, 'class1', 'test4'), dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test4', result='success', message='message7', content='content7', time=7)], failure=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test4', result='failure', message='message8', content='content8', time=8)])),
-                ((None, 'class1', 'test5'), dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test5', result='success', message='message9', content='content9', time=9)], error=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test5', result='error', message='message10', content='content10', time=10)])),
-            ]),
+            case_results=create_unit_test_case_results({
+                (None, 'class1', 'test1'): dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1), UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test1', result='success', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=2)]),
+                (None, 'class1', 'test2'): dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test2', result='success', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=3)], skipped=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test2', result='skipped', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=4)]),
+                (None, 'class1', 'test3'): dict(skipped=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test3', result='skipped', message='message5', content='content5', stdout='stdout5', stderr='stderr5', time=5), UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test3', result='skipped', message='message6', content='content6', stdout='stdout6', stderr='stderr6', time=6)]),
+                (None, 'class1', 'test4'): dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test4', result='success', message='message7', content='content7', stdout='stdout7', stderr='stderr7', time=7)], failure=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test4', result='failure', message='message8', content='content8', stdout='stdout8', stderr='stderr8', time=8)]),
+                (None, 'class1', 'test5'): dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test5', result='success', message='message9', content='content9', stdout='stdout9', stderr='stderr9', time=9)], error=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test5', result='error', message='message10', content='content10', stdout='stdout10', stderr='stderr10', time=10)]),
+            }),
             tests=5, tests_skipped=1, tests_failures=1, tests_errors=1,
             commit='commit'
         ))
@@ -292,20 +322,20 @@ class TestUnitTestResults(unittest.TestCase):
         self.assertEqual(get_test_results(with_duplicates, True), UnitTestResults(
             files=1,
             errors=[],
-            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
             cases=10, cases_skipped=3, cases_failures=1, cases_errors=1, cases_time=55,
-            case_results=UnitTestCaseResults([
-                (('test1', 'class1', 'test1'), dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', time=1)])),
-                (('test2', 'class1', 'test1'), dict(success=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test1', result='success', message='message2', content='content2', time=2)])),
-                (('test1', 'class1', 'test2'), dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test2', result='success', message='message3', content='content3', time=3)])),
-                (('test2', 'class1', 'test2'), dict(skipped=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test2', result='skipped', message='message4', content='content4', time=4)])),
-                (('test1', 'class1', 'test3'), dict(skipped=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test3', result='skipped', message='message5', content='content5', time=5)])),
-                (('test2', 'class1', 'test3'), dict(skipped=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test3', result='skipped', message='message6', content='content6', time=6)])),
-                (('test1', 'class1', 'test4'), dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test4', result='success', message='message7', content='content7', time=7)])),
-                (('test2', 'class1', 'test4'), dict(failure=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test4', result='failure', message='message8', content='content8', time=8)])),
-                (('test1', 'class1', 'test5'), dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test5', result='success', message='message9', content='content9', time=9)])),
-                (('test2', 'class1', 'test5'), dict(error=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test5', result='error', message='message10', content='content10', time=10)])),
-            ]),
+            case_results=create_unit_test_case_results({
+                ('test1', 'class1', 'test1'): dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1)]),
+                ('test2', 'class1', 'test1'): dict(success=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test1', result='success', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=2)]),
+                ('test1', 'class1', 'test2'): dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test2', result='success', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=3)]),
+                ('test2', 'class1', 'test2'): dict(skipped=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test2', result='skipped', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=4)]),
+                ('test1', 'class1', 'test3'): dict(skipped=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test3', result='skipped', message='message5', content='content5', stdout='stdout5', stderr='stderr5', time=5)]),
+                ('test2', 'class1', 'test3'): dict(skipped=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test3', result='skipped', message='message6', content='content6', stdout='stdout6', stderr='stderr6', time=6)]),
+                ('test1', 'class1', 'test4'): dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test4', result='success', message='message7', content='content7', stdout='stdout7', stderr='stderr7', time=7)]),
+                ('test2', 'class1', 'test4'): dict(failure=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test4', result='failure', message='message8', content='content8', stdout='stdout8', stderr='stderr8', time=8)]),
+                ('test1', 'class1', 'test5'): dict(success=[UnitTestCase(result_file='result', test_file='test1', line=123, class_name='class1', test_name='test5', result='success', message='message9', content='content9', stdout='stdout9', stderr='stderr9', time=9)]),
+                ('test2', 'class1', 'test5'): dict(error=[UnitTestCase(result_file='result', test_file='test2', line=123, class_name='class1', test_name='test5', result='error', message='message10', content='content10', stdout='stdout10', stderr='stderr10', time=10)]),
+            }),
             tests=10, tests_skipped=3, tests_failures=1, tests_errors=1,
             commit='commit'
         ))
@@ -314,23 +344,23 @@ class TestUnitTestResults(unittest.TestCase):
         self.assertEqual(get_test_results(ParsedUnitTestResultsWithCommit(
             files=1,
             errors=[],
-            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
             cases=[
-                UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test1', result='success', message='message1', content='content1', time=1),
-                UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test1', result='skipped', message='message2', content='content2', time=None),
-                UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test2', result='failure', message='message3', content='content3', time=2),
-                UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test2', result='skipped', message='message4', content='content4', time=None),
+                UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1),
+                UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test1', result='skipped', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=None),
+                UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test2', result='failure', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=2),
+                UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test2', result='skipped', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=None),
             ],
             commit='commit'
         ), False), UnitTestResults(
             files=1,
             errors=[],
-            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
             cases=4, cases_skipped=2, cases_failures=1, cases_errors=0, cases_time=3,
-            case_results=UnitTestCaseResults([
-                ((None, 'class', 'test1'), dict(success=[UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test1', result='success', message='message1', content='content1', time=1)], skipped=[UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test1', result='skipped', message='message2', content='content2', time=None)])),
-                ((None, 'class', 'test2'), dict(failure=[UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test2', result='failure', message='message3', content='content3', time=2)], skipped=[UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test2', result='skipped', message='message4', content='content4', time=None)])),
-            ]),
+            case_results=create_unit_test_case_results({
+                (None, 'class', 'test1'): dict(success=[UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1)], skipped=[UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test1', result='skipped', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=None)]),
+                (None, 'class', 'test2'): dict(failure=[UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test2', result='failure', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=2)], skipped=[UnitTestCase(result_file='result', test_file=None, line=None, class_name='class', test_name='test2', result='skipped', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=None)]),
+            }),
             tests=2, tests_skipped=0, tests_failures=1, tests_errors=0,
             commit='commit'
         ))
@@ -339,31 +369,31 @@ class TestUnitTestResults(unittest.TestCase):
         self.assertEqual(get_test_results(ParsedUnitTestResultsWithCommit(
             files=1,
             errors=errors,
-            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
             cases=[
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', time=1),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', time=2),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', time=3),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', time=4),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='disabled', message='message5', content='content5', time=5),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', time=6),
-                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', time=7),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=2),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=3),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=4),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='disabled', message='message5', content='content5', stdout='stdout5', stderr='stderr5', time=5),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', stdout='stdout6', stderr='stderr6', time=6),
+                UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', stdout='stdout7', stderr='stderr7', time=7),
             ],
             commit='commit'
         ), False), UnitTestResults(
             files=1,
             errors=errors,
-            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7,
+            suites=2, suite_tests=3, suite_skipped=4, suite_failures=5, suite_errors=6, suite_time=7, suite_details=self.details,
             cases=7, cases_skipped=2, cases_failures=3, cases_errors=1, cases_time=28,
-            case_results=UnitTestCaseResults([
-                ((None, 'class1', 'test1'), dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', time=1)])),
-                ((None, 'class1', 'test2'), dict(skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', time=2)])),
-                ((None, 'class1', 'test3'), dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', time=3)])),
-                ((None, 'class2', 'test1'), dict(error=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', time=4)])),
-                ((None, 'class2', 'test2'), dict(skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='disabled', message='message5', content='content5', time=5)])),
-                ((None, 'class2', 'test3'), dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', time=6)])),
-                ((None, 'class2', 'test4'), dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', time=7)])),
-            ]),
+            case_results=create_unit_test_case_results({
+                (None, 'class1', 'test1'): dict(success=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test1', result='success', message='message1', content='content1', stdout='stdout1', stderr='stderr1', time=1)]),
+                (None, 'class1', 'test2'): dict(skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test2', result='skipped', message='message2', content='content2', stdout='stdout2', stderr='stderr2', time=2)]),
+                (None, 'class1', 'test3'): dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class1', test_name='test3', result='failure', message='message3', content='content3', stdout='stdout3', stderr='stderr3', time=3)]),
+                (None, 'class2', 'test1'): dict(error=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test1', result='error', message='message4', content='content4', stdout='stdout4', stderr='stderr4', time=4)]),
+                (None, 'class2', 'test2'): dict(skipped=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test2', result='disabled', message='message5', content='content5', stdout='stdout5', stderr='stderr5', time=5)]),
+                (None, 'class2', 'test3'): dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test3', result='failure', message='message6', content='content6', stdout='stdout6', stderr='stderr6', time=6)]),
+                (None, 'class2', 'test4'): dict(failure=[UnitTestCase(result_file='result', test_file='test', line=123, class_name='class2', test_name='test4', result='failure', message='message7', content='content7', stdout='stdout7', stderr='stderr7', time=7)]),
+            }),
             tests=7, tests_skipped=2, tests_failures=3, tests_errors=1,
             commit='commit'
         ))
@@ -379,13 +409,14 @@ class TestUnitTestResults(unittest.TestCase):
             suite_failures=6,
             suite_errors=7,
             suite_time=3,
+            suite_details=self.details,
 
             cases=40,
             cases_skipped=11,
             cases_failures=12,
             cases_errors=13,
             cases_time=4,
-            case_results=UnitTestCaseResults(),
+            case_results=create_unit_test_case_results(),
 
             tests=30,
             tests_skipped=8,
@@ -398,6 +429,8 @@ class TestUnitTestResults(unittest.TestCase):
             errors=errors,
             suites=2,
             duration=3,
+
+            suite_details=self.details,
 
             tests=30,
             tests_succ=3,
@@ -420,6 +453,7 @@ class TestUnitTestResults(unittest.TestCase):
             errors=errors,
             suites=2,
             duration=3,
+            suite_details=self.details,
 
             tests=20,
             tests_succ=2,
@@ -436,9 +470,11 @@ class TestUnitTestResults(unittest.TestCase):
             commit='commit'
         ), UnitTestRunResults(
             files=3,
-            errors=[ParseError('other file', 'other error', None, None)],
+            errors=[ParseError('other file', 'other error')],
             suites=5,
             duration=7,
+
+            suite_details=self.details,
 
             tests=41,
             tests_succ=5,
@@ -458,6 +494,8 @@ class TestUnitTestResults(unittest.TestCase):
             errors=errors,
             suites=n(2, -3),
             duration=d(3, -4),
+
+            suite_details=self.details,
 
             tests=n(20, -21),
             tests_succ=n(2, -3),

@@ -1,7 +1,8 @@
-from collections import defaultdict
 import dataclasses
+from collections import defaultdict
+from copy import deepcopy
 from dataclasses import dataclass
-from typing import Optional, List, Mapping, Any, Union, Dict, Callable
+from typing import Optional, List, Mapping, Any, Union, Dict, Callable, Tuple, AbstractSet
 from xml.etree.ElementTree import ParseError as XmlParseError
 
 
@@ -15,22 +16,32 @@ class UnitTestCase:
     result: str
     message: Optional[str]
     content: Optional[str]
+    stdout: Optional[str]
+    stderr: Optional[str]
     time: Optional[float]
 
 
-class UnitTestCaseResults(defaultdict):
-    def __init__(self, items=None):
-        if items is None:
-            items = []
-        super(UnitTestCaseResults, self).__init__(lambda: defaultdict(list), items)
+UnitTestCaseFileName = str
+UnitTestCaseClassName = str
+UnitTestCaseTestName = str
+UnitTestCaseResultKey = Tuple[Optional[UnitTestCaseFileName], UnitTestCaseClassName, UnitTestCaseTestName]
+UnitTestCaseState = str
+UnitTestCaseResults = Mapping[UnitTestCaseResultKey, Mapping[UnitTestCaseState, List[UnitTestCase]]]
+
+
+def create_unit_test_case_results(indexed_cases: Optional[UnitTestCaseResults] = None) -> UnitTestCaseResults:
+    if indexed_cases:
+        return deepcopy(indexed_cases)
+    return defaultdict(lambda: defaultdict(list))
 
 
 @dataclass(frozen=True)
 class ParseError:
     file: str
     message: str
-    line: Optional[int]
-    column: Optional[int]
+    line: Optional[int] = None
+    column: Optional[int] = None
+    exception: Optional[BaseException] = None
 
     @staticmethod
     def from_exception(file: str, exception: BaseException):
@@ -44,8 +55,12 @@ class ParseError:
                 msg = f'File is not a valid XML file:\n{msg}'
             elif msg.startswith('Invalid format.'):
                 msg = f'File is not a valid JUnit file:\n{msg}'
-            return ParseError(file=file, message=msg, line=line, column=column)
-        return ParseError(file=file, message=str(exception), line=None, column=None)
+            return ParseError(file=file, message=msg, line=line, column=column, exception=exception)
+        return ParseError(file=file, message=str(exception), exception=exception)
+
+    # exceptions can be arbitrary types and might not be serializable
+    def without_exception(self) -> 'ParseError':
+        return dataclasses.replace(self, exception=None)
 
 
 @dataclass(frozen=True)
@@ -58,6 +73,7 @@ class ParsedUnitTestResults:
     suite_failures: int
     suite_errors: int
     suite_time: int
+    suite_details: List['UnitTestSuite']
     cases: List[UnitTestCase]
 
     def with_commit(self, commit: str) -> 'ParsedUnitTestResultsWithCommit':
@@ -70,6 +86,7 @@ class ParsedUnitTestResults:
             self.suite_failures,
             self.suite_errors,
             self.suite_time,
+            self.suite_details,
             self.cases,
             commit
         )
@@ -98,7 +115,7 @@ class ParsedUnitTestResultsWithCommit(ParsedUnitTestResults):
             suite_failures=self.suite_failures,
             suite_errors=self.suite_errors,
             suite_time=self.suite_time,
-
+            suite_details=self.suite_details,
             commit=self.commit,
 
             cases=len(self.cases),
@@ -123,13 +140,24 @@ class ParsedUnitTestResultsWithCommit(ParsedUnitTestResults):
             cases_failures=self.suite_failures,
             cases_errors=self.suite_errors,
             cases_time=self.suite_time,
-            case_results=UnitTestCaseResults(),
+            case_results=create_unit_test_case_results(),
 
             tests=self.suite_tests,
             tests_skipped=self.suite_skipped,
             tests_failures=self.suite_failures,
             tests_errors=self.suite_errors,
         )
+
+
+@dataclass(frozen=True)
+class UnitTestSuite:
+    name: str
+    tests: int
+    skipped: int
+    failures: int
+    errors: int
+    stdout: Optional[str]
+    stderr: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -153,6 +181,8 @@ class UnitTestRunResults:
     errors: List[ParseError]
     suites: int
     duration: int
+
+    suite_details: Optional[List[UnitTestSuite]]
 
     tests: int
     tests_succ: int
@@ -208,12 +238,14 @@ class UnitTestRunResults:
     def is_different_in_errors(self, other: 'UnitTestRunResultsOrDeltaResults'):
         return self.is_different(other, self._error_fields)
 
-    def with_errors(self, errors: List[ParseError]):
+    def with_errors(self, errors: List[ParseError]) -> 'UnitTestRunResults':
         return UnitTestRunResults(
             files=self.files,
             errors=errors,
             suites=self.suites,
             duration=self.duration,
+
+            suite_details=self.suite_details,
 
             tests=self.tests,
             tests_succ=self.tests_succ,
@@ -230,8 +262,19 @@ class UnitTestRunResults:
             commit=self.commit
         )
 
+    # exceptions can be arbitrary types and might not be serializable
+    def without_exceptions(self) -> 'UnitTestRunResults':
+        return dataclasses.replace(self, errors=[error.without_exception() for error in self.errors])
+
+    def without_suite_details(self) -> 'UnitTestRunResults':
+        return dataclasses.replace(self, suite_details=None)
+
     def to_dict(self) -> Dict[str, Any]:
-        return dataclasses.asdict(self)
+        # dict is usually used to serialize, but exceptions are likely not serializable, so we exclude them
+        # suite details might be arbitrarily large, we exclude those too
+        return dataclasses.asdict(self.without_exceptions().without_suite_details(),
+                                  # the dict_factory removes None values
+                                  dict_factory=lambda x: {k: v for (k, v) in x if v is not None})
 
     @staticmethod
     def from_dict(values: Mapping[str, Any]) -> 'UnitTestRunResults':
@@ -240,6 +283,8 @@ class UnitTestRunResults:
             errors=values.get('errors', []),
             suites=values.get('suites'),
             duration=values.get('duration'),
+
+            suite_details=None,
 
             tests=values.get('tests'),
             tests_succ=values.get('tests_succ'),
@@ -266,6 +311,8 @@ class UnitTestRunDeltaResults:
     errors: List[ParseError]
     suites: Numeric
     duration: Numeric
+
+    suite_details: Optional[List[UnitTestSuite]]
 
     tests: Numeric
     tests_succ: Numeric
@@ -315,7 +362,8 @@ class UnitTestRunDeltaResults:
         return len(self.errors) > 0 or self.tests_error.get('number') > 0 or self.runs_error.get('number') > 0
 
     def to_dict(self) -> Dict[str, Any]:
-        return dataclasses.asdict(self)
+        # dict is usually used to serialize, but exceptions are likely not serializable, so we exclude them
+        return dataclasses.asdict(self.without_exceptions())
 
     def without_delta(self) -> UnitTestRunResults:
         def v(value: Numeric) -> int:
@@ -324,16 +372,22 @@ class UnitTestRunDeltaResults:
         def d(value: Numeric) -> int:
             return value['duration']
 
-        return UnitTestRunResults(files=v(self.files), errors=self.errors, suites=v(self.suites), duration=d(self.duration),
+        return UnitTestRunResults(files=v(self.files), errors=self.errors, suites=v(self.suites), duration=d(self.duration), suite_details=None,
                                   tests=v(self.tests), tests_succ=v(self.tests_succ), tests_skip=v(self.tests_skip), tests_fail=v(self.tests_fail), tests_error=v(self.tests_error),
                                   runs=v(self.runs), runs_succ=v(self.runs_succ), runs_skip=v(self.runs_skip), runs_fail=v(self.runs_fail), runs_error=v(self.runs_error),
                                   commit=self.commit)
+
+    def without_exceptions(self) -> 'UnitTestRunDeltaResults':
+        return dataclasses.replace(self, errors=[error.without_exception() for error in self.errors])
+
+    def without_suite_details(self) -> 'UnitTestRunDeltaResults':
+        return dataclasses.replace(self, suite_details=None)
 
 
 UnitTestRunResultsOrDeltaResults = Union[UnitTestRunResults, UnitTestRunDeltaResults]
 
 
-def aggregate_states(states: List[str]) -> str:
+def aggregate_states(states: AbstractSet[str]) -> str:
     return 'error' if 'error' in states else \
            'failure' if 'failure' in states else \
            'success' if 'success' in states else \
@@ -361,15 +415,21 @@ def get_test_results(parsed_results: ParsedUnitTestResultsWithCommit,
     cases_errors = [case for case in cases if case.result == 'error']
     cases_time = sum([case.time or 0 for case in cases])
 
-    # group cases by tests
-    cases_results = UnitTestCaseResults()
+    # index cases by tests and state
+    cases_results = create_unit_test_case_results()
     for case in cases:
-        key = (case.test_file if dedup_classes_by_file_name else None, case.class_name, case.test_name)
-        cases_results[key][case.result if case.result != 'disabled' else 'skipped'].append(case)
+        # index by test file name (when de-duplicating by file name), class name and test name
+        test = (case.test_file if dedup_classes_by_file_name else None, case.class_name, case.test_name)
+
+        # second index by state
+        state = case.result if case.result != 'disabled' else 'skipped'
+
+        # collect cases of test and state
+        cases_results[test][state].append(case)
 
     test_results = dict()
     for test, states in cases_results.items():
-        test_results[test] = aggregate_states(states)
+        test_results[test] = aggregate_states(states.keys())
 
     tests = len(test_results)
     tests_skipped = len([test for test, state in test_results.items() if state in ['skipped', 'disabled']])
@@ -402,6 +462,8 @@ def get_stats(test_results: UnitTestResults) -> UnitTestRunResults:
         errors=test_results.errors,
         suites=test_results.suites,
         duration=test_results.suite_time,
+
+        suite_details=test_results.suite_details,
 
         tests=test_results.tests,
         tests_succ=tests_succ,
@@ -440,6 +502,8 @@ def get_stats_delta(stats: UnitTestRunResults,
         errors=stats.errors,
         suites=get_diff_value(stats.suites, reference_stats.suites),
         duration=get_diff_value(stats.duration, reference_stats.duration, 'duration'),
+
+        suite_details=stats.suite_details,
 
         tests=get_diff_value(stats.tests, reference_stats.tests),
         tests_succ=get_diff_value(stats.tests_succ, reference_stats.tests_succ),
